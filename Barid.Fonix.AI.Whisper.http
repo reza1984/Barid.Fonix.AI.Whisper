@@ -1,0 +1,6 @@
+@Barid.Fonix.AI.Whisper_HostAddress = http://localhost:5119
+
+GET {{Barid.Fonix.AI.Whisper_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

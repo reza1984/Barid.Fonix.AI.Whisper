@@ -1,0 +1,60 @@
+# .gitignore for .NET projects
+ai-models
+# Build results
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio Code
+.vscode/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# ASP.NET Scaffolding
+ScaffoldingReadMe.txt
+
+# Others
+*.log
+*.vspscc
+*.vssscc
+_ReSharper*/
+*.resharper
+*.DotSettings
+
+# NuGet Packages
+*.nupkg
+# The packages folder can be ignored if it is not under source control
+**/packages/*
+!**/packages/build/
+!**/packages/repositories.config
+
+# Static web assets
+**/staticwebassets/
+
+# Rider
+.idea/
+*.sln.iml
+
+# Test results
+TestResults/
+
+# Coverage
+coverage*
+*.coverage
+*.coveragexml
+
+# Backup & temp files
+*.bak
+*.tmp
+~$*
+
+# Others
+*.swp
+*.lock
