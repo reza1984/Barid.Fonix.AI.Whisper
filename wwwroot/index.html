@@ -241,8 +241,8 @@
                 <option value="ar">Arabic</option>
             </select>
             <select id="transportSelect">
-                <option value="signalr" selected>SignalR (Auto-Reconnect)</option>
-                <option value="websocket">WebSocket (Legacy)</option>
+                <option value="" selected>SignalR (Auto-Reconnect)</option>
+                <option value="ws">WebSocket (Legacy)</option>
             </select>
         </div>
 
@@ -297,16 +297,24 @@
 
         async function startRecording() {
             try {
-                recognizer = new WhisperRecognition({
-                    transport: transportSelect.value,
+                // Build options - use URL for WebSocket, omit for SignalR
+                const options = {
                     model: modelSelect.value,
                     lang: languageSelect.value,
                     continuous: true,
                     interimResults: true
-                });
+                };
+
+                // Add WebSocket URL if selected (auto-detects transport)
+                if (transportSelect.value === 'ws') {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    options.url = `${protocol}//${window.location.host}/ws-transcribe`;
+                }
+
+                recognizer = new WhisperRecognition(options);
 
                 recognizer.onstart = () => {
-                    const transport = transportSelect.value === 'signalr' ? 'SignalR' : 'WebSocket';
+                    const transport = transportSelect.value === 'ws' ? 'WebSocket' : 'SignalR';
                     setStatus('recording', `Recording (${transport})...`);
                     startBtn.disabled = true;
                     stopBtn.disabled = false;
