@@ -16,7 +16,7 @@ class WhisperRecognition {
         this.interimResults = options.interimResults !== undefined ? options.interimResults : true;
         this.lang = options.lang || 'auto';
         this.model = options.model || 'ggml-small.bin';
-        this.chunkDuration = options.chunkDuration || 500;
+        this.chunkDuration = options.chunkDuration || 300; // Reduced from 500ms to 300ms for faster response
 
         this.wsUrl = options.wsUrl || this._getWebSocketUrl();
         this.ws = null;

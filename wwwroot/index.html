@@ -284,6 +284,7 @@
         let startTime = null;
         let durationInterval = null;
         let fullTranscript = '';
+        let finalTranscripts = [];
 
         startBtn.addEventListener('click', startRecording);
         stopBtn.addEventListener('click', stopRecording);
@@ -312,12 +313,30 @@
 
                 recognizer.onresult = (event) => {
                     const result = event.results[0];
+                    const text = result.transcript.trim();
+
+                    if (!text) {
+                        // Empty result - don't update display
+                        return;
+                    }
+
                     if (result.isFinal) {
-                        fullTranscript += result.transcript + ' ';
-                        appendTranscript(result.transcript, true);
+                        // Final result - add to permanent transcript
+                        finalTranscripts.push(text);
+                        fullTranscript = finalTranscripts.join(' ') + ' ';
+
+                        // Clear interim display
+                        const interim = transcriptDiv.querySelector('.interim');
+                        if (interim) {
+                            interim.remove();
+                        }
+
+                        renderTranscript();
                         updateWordCount();
                     } else {
-                        updateInterimTranscript(result.transcript);
+                        // Interim result - just show it (don't accumulate)
+                        // Backend sends cumulative text already
+                        updateInterimTranscript(text);
                     }
                 };
 
@@ -351,7 +370,29 @@
         function clearTranscript() {
             transcriptDiv.innerHTML = '';
             fullTranscript = '';
+            finalTranscripts = [];
             updateWordCount();
+        }
+
+        function renderTranscript() {
+            // Clear and rebuild from final transcripts
+            const existingInterim = transcriptDiv.querySelector('.interim');
+            transcriptDiv.innerHTML = '';
+
+            // Add all final transcripts
+            finalTranscripts.forEach(text => {
+                const p = document.createElement('p');
+                p.className = 'final';
+                p.textContent = text;
+                transcriptDiv.appendChild(p);
+            });
+
+            // Re-add interim if it existed
+            if (existingInterim && existingInterim.textContent) {
+                transcriptDiv.appendChild(existingInterim);
+            }
+
+            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
         }
 
         function setStatus(state, text) {
@@ -359,20 +400,9 @@
             statusText.textContent = text;
         }
 
-        function appendTranscript(text, isFinal) {
-            const existingInterim = transcriptDiv.querySelector('.interim');
-            if (existingInterim) {
-                existingInterim.remove();
-            }
-
-            const p = document.createElement('p');
-            p.className = isFinal ? 'final' : 'interim';
-            p.textContent = text;
-            transcriptDiv.appendChild(p);
-            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
-        }
-
         function updateInterimTranscript(text) {
+            if (!text || text.trim().length === 0) return;
+
             let interim = transcriptDiv.querySelector('.interim');
             if (!interim) {
                 interim = document.createElement('p');
