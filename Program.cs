@@ -5,6 +5,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
+builder.Services.AddSingleton<WhisperRuntimeDetector>();
 builder.Services.AddSingleton<WhisperService>();
 
 builder.Services.Configure<IConfiguration>(config =>
@@ -13,6 +14,10 @@ builder.Services.Configure<IConfiguration>(config =>
 });
 
 var app = builder.Build();
+
+// Detect and log runtime information
+var runtimeDetector = app.Services.GetRequiredService<WhisperRuntimeDetector>();
+runtimeDetector.LogRuntimeInfo();
 
 if (app.Environment.IsDevelopment())
 {

@@ -8,13 +8,29 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
-    <PackageReference Include="Whisper.net">
-      <Version>1.9.0</Version>
-    </PackageReference>
-    <PackageReference Include="Whisper.net.Runtime">
-      <Version>1.9.0</Version>
-    </PackageReference>
+    <PackageReference Include="Whisper.net" Version="1.9.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+  <!-- Runtime packages - uncomment the one you want to use -->
+  <!-- Default: CPU (cross-platform) -->
+  <ItemGroup Condition="'$(WhisperRuntime)' == '' OR '$(WhisperRuntime)' == 'cpu'">
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
+  </ItemGroup>
+
+  <!-- macOS Apple Silicon (M1/M2/M3) with CoreML acceleration -->
+  <ItemGroup Condition="'$(WhisperRuntime)' == 'coreml'">
+    <PackageReference Include="Whisper.net.Runtime.CoreML" Version="1.9.0" />
+  </ItemGroup>
+
+  <!-- NVIDIA CUDA GPU acceleration -->
+  <ItemGroup Condition="'$(WhisperRuntime)' == 'cuda'">
+    <PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.9.0" />
+  </ItemGroup>
+
+  <!-- Vulkan GPU acceleration -->
+  <ItemGroup Condition="'$(WhisperRuntime)' == 'vulkan'">
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
   </ItemGroup>
 
 </Project>
