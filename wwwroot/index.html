@@ -239,7 +239,10 @@
                 <option value="en">English</option>
                 <option value="fa">Farsi</option>
                 <option value="ar">Arabic</option>
-                
+            </select>
+            <select id="transportSelect">
+                <option value="signalr" selected>SignalR (Auto-Reconnect)</option>
+                <option value="websocket">WebSocket (Legacy)</option>
             </select>
         </div>
 
@@ -266,6 +269,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
     <script src="/js/whisper-client.js"></script>
     <script>
         const startBtn = document.getElementById('startBtn');
@@ -273,6 +277,7 @@
         const clearBtn = document.getElementById('clearBtn');
         const modelSelect = document.getElementById('modelSelect');
         const languageSelect = document.getElementById('languageSelect');
+        const transportSelect = document.getElementById('transportSelect');
         const statusDiv = document.getElementById('status');
         const statusText = document.getElementById('statusText');
         const transcriptDiv = document.getElementById('transcript');
@@ -293,7 +298,7 @@
         async function startRecording() {
             try {
                 recognizer = new WhisperRecognition({
-                    wsUrl:'http://localhost:7000/ws-transcribe',
+                    transport: transportSelect.value,
                     model: modelSelect.value,
                     lang: languageSelect.value,
                     continuous: true,
@@ -301,11 +306,13 @@
                 });
 
                 recognizer.onstart = () => {
-                    setStatus('recording', 'Recording...');
+                    const transport = transportSelect.value === 'signalr' ? 'SignalR' : 'WebSocket';
+                    setStatus('recording', `Recording (${transport})...`);
                     startBtn.disabled = true;
                     stopBtn.disabled = false;
                     modelSelect.disabled = true;
                     languageSelect.disabled = true;
+                    transportSelect.disabled = true;
                     startTime = Date.now();
                     updateDuration();
                     durationInterval = setInterval(updateDuration, 1000);
@@ -351,6 +358,7 @@
                     stopBtn.disabled = true;
                     modelSelect.disabled = false;
                     languageSelect.disabled = false;
+                    transportSelect.disabled = false;
                     clearInterval(durationInterval);
                 };
 
