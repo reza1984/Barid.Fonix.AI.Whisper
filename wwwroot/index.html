@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Live Transcription Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-start {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            background: #059669;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-stop {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background: #dc2626;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-clear {
+            background: #6b7280;
+            color: white;
+        }
+
+        .btn-clear:hover {
+            background: #4b5563;
+            transform: translateY(-2px);
+        }
+
+        select {
+            padding: 15px 20px;
+            font-size: 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .status {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status.idle {
+            background: #f3f4f6;
+            color: #6b7280;
+        }
+
+        .status.recording {
+            background: #fef3c7;
+            color: #92400e;
+            animation: pulse 2s infinite;
+        }
+
+        .status.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .recording .indicator {
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .transcript-box {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 25px;
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            font-size: 18px;
+            line-height: 1.6;
+            color: #1f2937;
+        }
+
+        .transcript-box:empty::before {
+            content: 'Your transcription will appear here...';
+            color: #9ca3af;
+            font-style: italic;
+        }
+
+        .interim {
+            color: #6b7280;
+            font-style: italic;
+        }
+
+        .final {
+            color: #1f2937;
+            margin-bottom: 10px;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1f2937;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Whisper Live Transcription</h1>
+        <p class="subtitle">Real-time speech-to-text powered by OpenAI Whisper</p>
+
+        <div class="controls">
+            <button id="startBtn" class="btn-start">Start Recording</button>
+            <button id="stopBtn" class="btn-stop" disabled>Stop Recording</button>
+            <button id="clearBtn" class="btn-clear">Clear Transcript</button>
+            <select id="modelSelect">
+                <option value="ggml-tiny.bin">Tiny (fastest)</option>
+                <option value="ggml-base.bin" selected>Base (recommended)</option>
+                <option value="ggml-small.bin">Small (accurate)</option>
+                <option value="ggml-medium.bin">Medium (most accurate)</option>
+            </select>
+            <select id="languageSelect">
+                <option value="auto" selected>Auto Detect</option>
+                <option value="en">English</option>
+                <option value="fa">Farsi</option>
+                <option value="ar">Arabic</option>
+                
+            </select>
+        </div>
+
+        <div id="status" class="status idle">
+            <span class="indicator"></span>
+            <span id="statusText">Ready to start</span>
+        </div>
+
+        <div id="transcript" class="transcript-box"></div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-label">Words</div>
+                <div id="wordCount" class="stat-value">0</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Duration</div>
+                <div id="duration" class="stat-value">0:00</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Model</div>
+                <div id="modelName" class="stat-value">Base</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/whisper-client.js"></script>
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const modelSelect = document.getElementById('modelSelect');
+        const languageSelect = document.getElementById('languageSelect');
+        const statusDiv = document.getElementById('status');
+        const statusText = document.getElementById('statusText');
+        const transcriptDiv = document.getElementById('transcript');
+        const wordCountDiv = document.getElementById('wordCount');
+        const durationDiv = document.getElementById('duration');
+        const modelNameDiv = document.getElementById('modelName');
+
+        let recognizer = null;
+        let startTime = null;
+        let durationInterval = null;
+        let fullTranscript = '';
+
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        clearBtn.addEventListener('click', clearTranscript);
+
+        async function startRecording() {
+            try {
+                recognizer = new WhisperRecognition({
+                    wsUrl:'http://localhost:7000/ws-transcribe',
+                    model: modelSelect.value,
+                    lang: languageSelect.value,
+                    continuous: true,
+                    interimResults: true
+                });
+
+                recognizer.onstart = () => {
+                    setStatus('recording', 'Recording...');
+                    startBtn.disabled = true;
+                    stopBtn.disabled = false;
+                    modelSelect.disabled = true;
+                    languageSelect.disabled = true;
+                    startTime = Date.now();
+                    updateDuration();
+                    durationInterval = setInterval(updateDuration, 1000);
+                };
+
+                recognizer.onresult = (event) => {
+                    const result = event.results[0];
+                    if (result.isFinal) {
+                        fullTranscript += result.transcript + ' ';
+                        appendTranscript(result.transcript, true);
+                        updateWordCount();
+                    } else {
+                        updateInterimTranscript(result.transcript);
+                    }
+                };
+
+                recognizer.onerror = (event) => {
+                    setStatus('error', `Error: ${event.message}`);
+                    stopRecording();
+                };
+
+                recognizer.onend = () => {
+                    setStatus('idle', 'Ready to start');
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    modelSelect.disabled = false;
+                    languageSelect.disabled = false;
+                    clearInterval(durationInterval);
+                };
+
+                await recognizer.start();
+            } catch (error) {
+                setStatus('error', `Failed to start: ${error.message}`);
+            }
+        }
+
+        function stopRecording() {
+            if (recognizer) {
+                recognizer.stop();
+                recognizer = null;
+            }
+        }
+
+        function clearTranscript() {
+            transcriptDiv.innerHTML = '';
+            fullTranscript = '';
+            updateWordCount();
+        }
+
+        function setStatus(state, text) {
+            statusDiv.className = `status ${state}`;
+            statusText.textContent = text;
+        }
+
+        function appendTranscript(text, isFinal) {
+            const existingInterim = transcriptDiv.querySelector('.interim');
+            if (existingInterim) {
+                existingInterim.remove();
+            }
+
+            const p = document.createElement('p');
+            p.className = isFinal ? 'final' : 'interim';
+            p.textContent = text;
+            transcriptDiv.appendChild(p);
+            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+        }
+
+        function updateInterimTranscript(text) {
+            let interim = transcriptDiv.querySelector('.interim');
+            if (!interim) {
+                interim = document.createElement('p');
+                interim.className = 'interim';
+                transcriptDiv.appendChild(interim);
+            }
+            interim.textContent = text;
+            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+        }
+
+        function updateWordCount() {
+            const words = fullTranscript.trim().split(/\s+/).filter(w => w.length > 0);
+            wordCountDiv.textContent = words.length;
+        }
+
+        function updateDuration() {
+            if (startTime) {
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                durationDiv.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
+
+        modelSelect.addEventListener('change', () => {
+            const modelNames = {
+                'ggml-tiny.bin': 'Tiny',
+                'ggml-base.bin': 'Base',
+                'ggml-small.bin': 'Small',
+                'ggml-medium.bin': 'Medium'
+            };
+            modelNameDiv.textContent = modelNames[modelSelect.value];
+        });
+    </script>
+</body>
+</html>

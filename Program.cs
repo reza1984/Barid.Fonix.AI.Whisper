@@ -1,41 +1,101 @@
+using Barid.Fonix.AI.Whisper.Services;
+using Barid.Fonix.AI.Whisper.Handlers;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddControllers();
+builder.Services.AddSingleton<WhisperService>();
+
+builder.Services.Configure<IConfiguration>(config =>
+{
+    config["MaxConcurrentTranscriptionSessions"] = "5";
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+var whisperService = app.Services.GetRequiredService<WhisperService>();
+await whisperService.InitializeAsync();
 
-var summaries = new[]
+app.UseWebSockets(new WebSocketOptions
 {
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
+    KeepAliveInterval = TimeSpan.FromSeconds(30)
+});
 
-app.MapGet("/weatherforecast", () =>
+app.Use(async (context, next) =>
 {
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast");
+    if (context.Request.Path == "/ws-transcribe")
+    {
+        if (context.WebSockets.IsWebSocketRequest)
+        {
+            var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+            var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+
+            await WebSocketTranscriptionHandler.HandleWebSocketAsync(
+                webSocket,
+                whisperService,
+                logger,
+                context.RequestAborted);
+        }
+        else
+        {
+            context.Response.StatusCode = 400;
+        }
+    }
+    else
+    {
+        await next();
+    }
+});
+
+app.UseStaticFiles();
+app.MapControllers();
+
+app.MapGet("/", () => Results.Content(@"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Whisper Transcription API</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #333; }
+        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        code { background: #e0e0e0; padding: 2px 6px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Whisper Transcription API</h1>
+    <p>Welcome to the live transcription service powered by OpenAI Whisper.</p>
+
+    <h2>Endpoints</h2>
+
+    <div class='endpoint'>
+        <h3>WebSocket Live Transcription</h3>
+        <p><code>WS /ws-transcribe</code></p>
+        <p>Real-time audio transcription via WebSocket. Send audio chunks as WAV binary data.</p>
+    </div>
+
+    <div class='endpoint'>
+        <h3>File Upload Transcription</h3>
+        <p><code>POST /api/transcribe/file</code></p>
+        <p>Upload an audio file for transcription. Supports WAV format.</p>
+    </div>
+
+    <div class='endpoint'>
+        <h3>Available Models</h3>
+        <p><code>GET /api/transcribe/models</code></p>
+        <p>List available Whisper models and their characteristics.</p>
+    </div>
+
+    <h2>Client Library</h2>
+    <p>Include <code>/js/whisper-client.js</code> in your web page for a Web Speech API-like interface.</p>
+</body>
+</html>
+", "text/html"));
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
