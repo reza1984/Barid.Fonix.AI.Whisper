@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using Barid.Fonix.AI.Whisper.Services;
-using Barid.Fonix.AI.Whisper.Utils;
 using Microsoft.AspNetCore.SignalR;
 
 namespace Barid.Fonix.AI.Whisper.Hubs;
@@ -62,7 +61,7 @@ public class TranscriptionHub : Hub
         }
     }
 
-    public async Task SendAudioChunk(byte[] audioData)
+    public async Task SendAudioChunk(string audioDataBase64)
     {
         if (!_sessions.TryGetValue(Context.ConnectionId, out var session))
         {
@@ -72,6 +71,9 @@ public class TranscriptionHub : Hub
 
         try
         {
+            // Decode base64 to byte array
+            var audioData = Convert.FromBase64String(audioDataBase64);
+
             // Validate WAV header
             if (!AudioUtils.ValidateWavHeader(audioData))
             {
@@ -80,7 +82,7 @@ public class TranscriptionHub : Hub
             }
 
             // Convert to float samples
-            var samples = AudioUtils.ConvertBytesToFloatSamples(audioData);
+            var samples = AudioUtils.ConvertWavBytesToFloatSamples(audioData);
 
             // Process audio
             var result = await session.ProcessAudioChunkAsync(samples);

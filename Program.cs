@@ -6,7 +6,12 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    // Increase message size limit for audio chunks (300ms at 16kHz = ~9.6KB WAV, but allow up to 1MB)
+    options.MaximumReceiveMessageSize = 1024 * 1024; // 1MB
+    options.EnableDetailedErrors = true; // Helpful for debugging
+});
 builder.Services.AddSingleton<WhisperRuntimeDetector>();
 builder.Services.AddSingleton<WhisperService>();
 

@@ -5,6 +5,7 @@ namespace Barid.Fonix.AI.Whisper.Services;
 public class TranscriptionSession : IDisposable
 {
     private readonly WhisperProcessor _processor;
+    private readonly WhisperFactory? _factory;
     private readonly SemaphoreSlim _sessionLimitSemaphore;
     private readonly ILogger _logger;
     private readonly List<float> _audioBuffer = [];
@@ -20,9 +21,10 @@ public class TranscriptionSession : IDisposable
     private string _lastProcessedText = ""; // Last text we got from Whisper
     private int _silenceSamples = 0;
 
-    public TranscriptionSession(WhisperProcessor processor, SemaphoreSlim sessionLimitSemaphore, ILogger logger)
+    public TranscriptionSession(WhisperProcessor processor, WhisperFactory? factory, SemaphoreSlim sessionLimitSemaphore, ILogger logger)
     {
         _processor = processor;
+        _factory = factory;
         _sessionLimitSemaphore = sessionLimitSemaphore;
         _logger = logger;
     }
@@ -300,6 +302,7 @@ public class TranscriptionSession : IDisposable
         if (_disposed) return;
 
         _processor?.Dispose();
+        _factory?.Dispose();
         _processingLock?.Dispose();
         _sessionLimitSemaphore?.Release();
         _disposed = true;

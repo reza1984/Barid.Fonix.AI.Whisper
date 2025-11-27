@@ -101,11 +101,11 @@ class WhisperRecognition {
         this.connection.on('TranscriptionResult', (data) => {
             if (this.onresult) {
                 const event = {
-                    results: [[{
+                    results: [{
                         transcript: data.text,
                         confidence: 1.0,
                         isFinal: data.isFinal
-                    }]],
+                    }],
                     resultIndex: 0,
                     segments: data.segments
                 };
@@ -179,7 +179,11 @@ class WhisperRecognition {
 
         try {
             const wavBuffer = this._createWavBuffer(float32Samples);
-            await this.connection.invoke('SendAudioChunk', Array.from(new Uint8Array(wavBuffer)));
+            const uint8Array = new Uint8Array(wavBuffer);
+
+            // Convert to base64 string for SignalR JSON protocol
+            const base64 = this._arrayBufferToBase64(uint8Array);
+            await this.connection.invoke('SendAudioChunk', base64);
         } catch (err) {
             console.error('SignalR: Failed to send audio chunk:', err);
         }
@@ -240,11 +244,11 @@ class WhisperRecognition {
             } else if (message.type === 'result') {
                 if (this.onresult) {
                     const event = {
-                        results: [[{
+                        results: [{
                             transcript: message.text,
                             confidence: 1.0,
                             isFinal: !message.isPartial
-                        }]],
+                        }],
                         resultIndex: 0,
                         segments: message.segments
                     };
@@ -427,6 +431,15 @@ class WhisperRecognition {
         for (let i = 0; i < string.length; i++) {
             view.setUint8(offset + i, string.charCodeAt(i));
         }
+    }
+
+    _arrayBufferToBase64(uint8Array) {
+        let binary = '';
+        const len = uint8Array.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+        }
+        return btoa(binary);
     }
 
     async stop() {
