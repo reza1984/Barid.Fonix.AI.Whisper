@@ -1,10 +1,17 @@
 using Barid.Fonix.AI.Whisper.Services;
+using Barid.Fonix.AI.Whisper.Hubs;
 using Barid.Fonix.AI.Whisper.Handlers;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
+builder.Services.AddSignalR(options =>
+{
+    // Increase message size limit for audio chunks (300ms at 16kHz = ~9.6KB WAV, but allow up to 1MB)
+    options.MaximumReceiveMessageSize = 1024 * 1024; // 1MB
+    options.EnableDetailedErrors = true; // Helpful for debugging
+});
 builder.Services.AddSingleton<WhisperRuntimeDetector>();
 builder.Services.AddSingleton<WhisperService>();
 
@@ -27,11 +34,13 @@ if (app.Environment.IsDevelopment())
 var whisperService = app.Services.GetRequiredService<WhisperService>();
 await whisperService.InitializeAsync();
 
+// Enable WebSocket support (legacy endpoint)
 app.UseWebSockets(new WebSocketOptions
 {
     KeepAliveInterval = TimeSpan.FromSeconds(30)
 });
 
+// WebSocket endpoint for backward compatibility
 app.Use(async (context, next) =>
 {
     if (context.Request.Path == "/ws-transcribe")
@@ -61,6 +70,9 @@ app.Use(async (context, next) =>
 app.UseStaticFiles();
 app.MapControllers();
 
+// SignalR endpoint (recommended - with automatic reconnection)
+app.MapHub<TranscriptionHub>("/transcription-hub");
+
 app.MapGet("/", () => Results.Content(@"
 <!DOCTYPE html>
 <html>
@@ -80,9 +92,15 @@ app.MapGet("/", () => Results.Content(@"
     <h2>Endpoints</h2>
 
     <div class='endpoint'>
-        <h3>WebSocket Live Transcription</h3>
+        <h3>SignalR Live Transcription (Recommended)</h3>
+        <p><code>SignalR /transcription-hub</code></p>
+        <p>Real-time audio transcription via SignalR with automatic reconnection and transport fallback. Send audio chunks as WAV binary data.</p>
+    </div>
+
+    <div class='endpoint'>
+        <h3>WebSocket Live Transcription (Legacy)</h3>
         <p><code>WS /ws-transcribe</code></p>
-        <p>Real-time audio transcription via WebSocket. Send audio chunks as WAV binary data.</p>
+        <p>Real-time audio transcription via WebSocket. Send audio chunks as WAV binary data. Note: No automatic reconnection.</p>
     </div>
 
     <div class='endpoint'>

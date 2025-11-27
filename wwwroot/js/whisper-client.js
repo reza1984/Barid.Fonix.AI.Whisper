@@ -1,8 +1,20 @@
 /**
  * WhisperRecognition - A Web Speech API-like interface for Whisper transcription
+ * Supports both WebSocket and SignalR transports with automatic detection
  *
  * Usage:
+ *   // Using SignalR (default - with automatic reconnection)
  *   const recognizer = new WhisperRecognition();
+ *
+ *   // Using WebSocket (auto-detected from URL)
+ *   const recognizer = new WhisperRecognition({ url: 'ws://localhost:7000/ws-transcribe' });
+ *
+ *   // Using SignalR with custom hub URL
+ *   const recognizer = new WhisperRecognition({ url: '/my-hub' });
+ *
+ *   // Explicit transport override
+ *   const recognizer = new WhisperRecognition({ transport: 'websocket' });
+ *
  *   recognizer.onstart = () => console.log('Started');
  *   recognizer.onresult = (event) => console.log('Result:', event.results);
  *   recognizer.onend = () => console.log('Ended');
@@ -12,83 +24,196 @@
 
 class WhisperRecognition {
     constructor(options = {}) {
+        // Auto-detect transport from URL or use explicit transport
+        const url = options.url || options.wsUrl; // Support legacy wsUrl
+
+        if (options.transport) {
+            // Explicit transport override
+            this.transport = options.transport;
+        } else if (url && (url.startsWith('ws:') || url.startsWith('wss:'))) {
+            // Auto-detect WebSocket from URL protocol
+            this.transport = 'websocket';
+        } else {
+            // Default to SignalR
+            this.transport = 'signalr';
+        }
+
+        // Common properties
         this.continuous = options.continuous !== undefined ? options.continuous : true;
         this.interimResults = options.interimResults !== undefined ? options.interimResults : true;
         this.lang = options.lang || 'auto';
         this.model = options.model || 'ggml-small.bin';
-        this.chunkDuration = options.chunkDuration || 300; // Reduced from 500ms to 300ms for faster response
+        this.chunkDuration = options.chunkDuration || 300;
+        this.sessionId = options.sessionId || null; // For multi-user collaboration
 
-        this.wsUrl = options.wsUrl || this._getWebSocketUrl();
-        this.ws = null;
-        this.audioContext = null;
-        this.mediaStream = null;
-        this.processor = null;
-        this.isRecording = false;
-        this.audioChunks = [];
-
+        // Events
         this.onstart = null;
-        this.onend = null;
         this.onresult = null;
         this.onerror = null;
-        this.onaudiostart = null;
-        this.onaudioend = null;
-        this.onsoundstart = null;
-        this.onsoundend = null;
-        this.onnomatch = null;
+        this.onend = null;
+
+        // Transport-specific properties
+        if (this.transport === 'signalr') {
+            this.hubUrl = url || '/transcription-hub';
+            this.connection = null;
+        } else {
+            this.wsUrl = url || this._getDefaultWebSocketUrl();
+            this.ws = null;
+            this.sessionStarted = false;
+        }
+
+        // Audio capture (shared)
+        this.audioContext = null;
+        this.audioWorklet = null;
+        this.stream = null;
+        this._isRecording = false;
+
+        console.log(`WhisperRecognition initialized with ${this.transport} transport (URL: ${this.transport === 'signalr' ? this.hubUrl : this.wsUrl})`);
     }
 
-    _getWebSocketUrl() {
+    _getDefaultWebSocketUrl() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         return `${protocol}//${window.location.host}/ws-transcribe`;
     }
 
-    async start() {
-        if (this.isRecording) {
-            this._emitError('already-started', 'Recognition is already started');
+    // ========== SignalR Implementation ==========
+
+    async _initializeSignalRConnection() {
+        this.connection = new signalR.HubConnectionBuilder()
+            .withUrl(this.hubUrl)
+            .withAutomaticReconnect({
+                nextRetryDelayInMilliseconds: (retryContext) => {
+                    if (retryContext.elapsedMilliseconds < 60000) {
+                        return Math.min(1000 * Math.pow(2, retryContext.previousRetryCount), 60000);
+                    } else {
+                        return null;
+                    }
+                }
+            })
+            .configureLogging(signalR.LogLevel.Information)
+            .build();
+
+        this.connection.on('SessionStarted', (data) => {
+            console.log('SignalR: Session started:', data);
+            if (this.onstart) this.onstart();
+        });
+
+        this.connection.on('TranscriptionResult', (data) => {
+            if (this.onresult) {
+                const event = {
+                    results: [{
+                        transcript: data.text,
+                        confidence: 1.0,
+                        isFinal: data.isFinal
+                    }],
+                    resultIndex: 0,
+                    segments: data.segments
+                };
+                this.onresult(event);
+            }
+        });
+
+        this.connection.on('SessionStopped', (data) => {
+            console.log('SignalR: Session stopped:', data);
+            if (this.onend) this.onend();
+        });
+
+        this.connection.on('Error', (error) => {
+            console.error('SignalR: Server error:', error);
+            if (this.onerror) {
+                this.onerror({ error: 'service-error', message: error });
+            }
+        });
+
+        this.connection.onreconnecting((error) => {
+            console.warn('SignalR: Connection lost. Reconnecting...', error);
+            if (this.onerror) {
+                this.onerror({
+                    error: 'network',
+                    message: 'Connection lost. Reconnecting...',
+                    isReconnecting: true
+                });
+            }
+        });
+
+        this.connection.onreconnected((connectionId) => {
+            console.log('SignalR: Reconnected:', connectionId);
+            if (this._isRecording) {
+                this._restartSignalRSession();
+            }
+        });
+
+        this.connection.onclose((error) => {
+            console.error('SignalR: Connection closed:', error);
+            if (this.onerror) {
+                this.onerror({ error: 'network', message: 'Connection closed' });
+            }
+            if (this.onend) this.onend();
+        });
+
+        try {
+            await this.connection.start();
+            console.log('SignalR: Connected');
+        } catch (err) {
+            console.error('SignalR: Failed to connect:', err);
+            throw err;
+        }
+    }
+
+    async _restartSignalRSession() {
+        try {
+            await this.connection.invoke('StartSession', this.model, this.lang, this.sessionId);
+        } catch (err) {
+            console.error('SignalR: Failed to restart session:', err);
+            if (this.onerror) {
+                this.onerror({ error: 'service-error', message: 'Failed to restart session' });
+            }
+        }
+    }
+
+    async _sendAudioChunkSignalR(float32Samples) {
+        if (!this.connection || this.connection.state !== signalR.HubConnectionState.Connected) {
+            console.warn('SignalR: Not connected, skipping chunk');
             return;
         }
 
         try {
-            await this._initializeWebSocket();
-            await this._waitForSessionStart();
-            await this._initializeAudio();
-            this.isRecording = true;
+            const wavBuffer = this._createWavBuffer(float32Samples);
+            const uint8Array = new Uint8Array(wavBuffer);
 
-            if (this.onstart) {
-                this.onstart();
+            // Convert to base64 string for SignalR JSON protocol
+            const base64 = this._arrayBufferToBase64(uint8Array);
+            await this.connection.invoke('SendAudioChunk', base64);
+        } catch (err) {
+            console.error('SignalR: Failed to send audio chunk:', err);
+        }
+    }
+
+    async _stopSignalR() {
+        if (this.connection && this.connection.state === signalR.HubConnectionState.Connected) {
+            try {
+                await this.connection.invoke('StopSession');
+            } catch (err) {
+                console.error('SignalR: Failed to stop session:', err);
             }
-        } catch (error) {
-            this._emitError('audio-capture', error.message);
         }
     }
 
-    stop() {
-        if (!this.isRecording) {
-            return;
-        }
-
-        this.isRecording = false;
-        this._stopAudioCapture();
-        this._sendControlMessage('stop');
-
-        if (this.onend) {
-            this.onend();
+    async _disconnectSignalR() {
+        if (this.connection) {
+            await this.connection.stop();
+            this.connection = null;
         }
     }
 
-    abort() {
-        this.stop();
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-        }
-    }
+    // ========== WebSocket Implementation ==========
 
     async _initializeWebSocket() {
         return new Promise((resolve, reject) => {
             this.ws = new WebSocket(this.wsUrl);
 
             this.ws.onopen = () => {
+                console.log('WebSocket: Connected');
                 resolve();
             };
 
@@ -97,268 +222,265 @@ class WhisperRecognition {
             };
 
             this.ws.onerror = (error) => {
+                console.error('WebSocket: Connection error:', error);
                 reject(new Error('WebSocket connection failed'));
             };
 
             this.ws.onclose = () => {
-                if (this.isRecording) {
-                    this._emitError('network', 'WebSocket connection closed unexpectedly');
-                    this.stop();
-                }
+                console.log('WebSocket: Connection closed');
+                if (this.onend) this.onend();
             };
         });
-    }
-
-    async _waitForSessionStart() {
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                reject(new Error('Session start timeout'));
-            }, 5000);
-
-            const originalOnMessage = this.ws.onmessage;
-            this.ws.onmessage = (event) => {
-                try {
-                    const message = JSON.parse(event.data);
-                    if (message.type === 'started') {
-                        clearTimeout(timeout);
-                        this.ws.onmessage = originalOnMessage;
-                        resolve();
-                    } else if (message.type === 'error') {
-                        clearTimeout(timeout);
-                        this.ws.onmessage = originalOnMessage;
-                        reject(new Error(message.error));
-                    } else {
-                        originalOnMessage(event);
-                    }
-                } catch (error) {
-                    originalOnMessage(event);
-                }
-            };
-
-            // Ensure WebSocket is ready before sending
-            if (this.ws.readyState === WebSocket.OPEN) {
-                this._sendControlMessage('start');
-            } else {
-                clearTimeout(timeout);
-                reject(new Error('WebSocket not ready'));
-            }
-        });
-    }
-
-    async _initializeAudio() {
-        try {
-            this.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    channelCount: 1,
-                    sampleRate: 16000,
-                    echoCancellation: true,
-                    noiseSuppression: true
-                }
-            });
-
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
-            });
-
-            const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-
-            await this.audioContext.audioWorklet.addModule(this._getProcessorCode());
-            this.processor = new AudioWorkletNode(this.audioContext, 'audio-chunk-processor', {
-                processorOptions: {
-                    chunkDuration: this.chunkDuration
-                }
-            });
-
-            this.processor.port.onmessage = (event) => {
-                if (event.data.type === 'audio-chunk') {
-                    this._sendAudioChunk(event.data.chunk);
-                }
-            };
-
-            source.connect(this.processor);
-            this.processor.connect(this.audioContext.destination);
-
-            if (this.onaudiostart) {
-                this.onaudiostart();
-            }
-        } catch (error) {
-            throw new Error(`Failed to initialize audio: ${error.message}`);
-        }
-    }
-
-    _getProcessorCode() {
-        const processorCode = `
-            class AudioChunkProcessor extends AudioWorkletProcessor {
-                constructor(options) {
-                    super();
-                    this.chunkDuration = options.processorOptions?.chunkDuration || 500;
-                    this.sampleRate = 16000;
-                    this.samplesPerChunk = Math.floor(this.sampleRate * this.chunkDuration / 1000);
-                    this.buffer = [];
-                }
-
-                process(inputs, outputs, parameters) {
-                    const input = inputs[0];
-                    if (input.length > 0) {
-                        const channelData = input[0];
-                        this.buffer.push(...channelData);
-
-                        if (this.buffer.length >= this.samplesPerChunk) {
-                            const chunk = this.buffer.slice(0, this.samplesPerChunk);
-                            this.buffer = this.buffer.slice(this.samplesPerChunk);
-
-                            this.port.postMessage({
-                                type: 'audio-chunk',
-                                chunk: chunk
-                            });
-                        }
-                    }
-                    return true;
-                }
-            }
-
-            registerProcessor('audio-chunk-processor', AudioChunkProcessor);
-        `;
-
-        const blob = new Blob([processorCode], { type: 'application/javascript' });
-        return URL.createObjectURL(blob);
-    }
-
-    _sendControlMessage(command) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-                command: command,
-                modelName: this.model,
-                language: this.lang
-            }));
-        }
-    }
-
-    _sendAudioChunk(audioSamples) {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isRecording) {
-            return;
-        }
-
-        const wavBuffer = this._createWavBuffer(audioSamples);
-        this.ws.send(wavBuffer);
-    }
-
-    _createWavBuffer(audioSamples) {
-        const sampleRate = 16000;
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const bytesPerSample = bitsPerSample / 8;
-        const blockAlign = numChannels * bytesPerSample;
-        const byteRate = sampleRate * blockAlign;
-        const dataSize = audioSamples.length * bytesPerSample;
-        const bufferSize = 44 + dataSize;
-
-        const buffer = new ArrayBuffer(bufferSize);
-        const view = new DataView(buffer);
-
-        const writeString = (offset, string) => {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        };
-
-        writeString(0, 'RIFF');
-        view.setUint32(4, bufferSize - 8, true);
-        writeString(8, 'WAVE');
-
-        writeString(12, 'fmt ');
-        view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true);
-        view.setUint16(22, numChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, byteRate, true);
-        view.setUint16(32, blockAlign, true);
-        view.setUint16(34, bitsPerSample, true);
-
-        writeString(36, 'data');
-        view.setUint32(40, dataSize, true);
-
-        let offset = 44;
-        for (let i = 0; i < audioSamples.length; i++) {
-            const sample = Math.max(-1, Math.min(1, audioSamples[i]));
-            const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-            view.setInt16(offset, int16, true);
-            offset += 2;
-        }
-
-        return buffer;
     }
 
     _handleWebSocketMessage(data) {
         try {
             const message = JSON.parse(data);
 
-            switch (message.type) {
-                case 'started':
-                    console.log('Transcription session started:', message.model);
-                    break;
-
-                case 'result':
-                    if (this.onresult) {
-                        const event = {
-                            results: [{
-                                isFinal: message.isFinal,
-                                transcript: message.text,
-                                confidence: 1.0
-                            }],
-                            resultIndex: 0
-                        };
-                        this.onresult(event);
-                    }
-                    break;
-
-                case 'stopped':
-                    console.log('Transcription session stopped');
-                    break;
-
-                case 'error':
-                    this._emitError('service-error', message.error);
-                    break;
-
-                default:
-                    console.warn('Unknown message type:', message.type);
+            if (message.type === 'started') {
+                console.log('WebSocket: Session started');
+                this.sessionStarted = true;
+                if (this.onstart) this.onstart();
+            } else if (message.type === 'result') {
+                if (this.onresult) {
+                    const event = {
+                        results: [{
+                            transcript: message.text,
+                            confidence: 1.0,
+                            isFinal: !message.isPartial
+                        }],
+                        resultIndex: 0,
+                        segments: message.segments
+                    };
+                    this.onresult(event);
+                }
+            } else if (message.type === 'stopped') {
+                console.log('WebSocket: Session stopped');
+                if (this.onend) this.onend();
+            } else if (message.type === 'error') {
+                console.error('WebSocket: Server error:', message.error);
+                if (this.onerror) {
+                    this.onerror({ error: 'service-error', message: message.error });
+                }
             }
-        } catch (error) {
-            console.error('Failed to parse WebSocket message:', error);
+        } catch (err) {
+            console.error('WebSocket: Failed to parse message:', err);
         }
     }
 
-    _stopAudioCapture() {
-        if (this.processor) {
-            this.processor.disconnect();
-            this.processor = null;
+    _sendWebSocketControlMessage(command, data = {}) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const message = { command, ...data };
+            this.ws.send(JSON.stringify(message));
+        }
+    }
+
+    async _waitForWebSocketSessionStart() {
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('Session start timeout'));
+            }, 5000);
+
+            const checkSession = () => {
+                if (this.sessionStarted) {
+                    clearTimeout(timeout);
+                    resolve();
+                } else {
+                    setTimeout(checkSession, 100);
+                }
+            };
+            checkSession();
+        });
+    }
+
+    async _sendAudioChunkWebSocket(float32Samples) {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket: Not connected, skipping chunk');
+            return;
         }
 
+        try {
+            const wavBuffer = this._createWavBuffer(float32Samples);
+            this.ws.send(wavBuffer);
+        } catch (err) {
+            console.error('WebSocket: Failed to send audio chunk:', err);
+        }
+    }
+
+    _stopWebSocket() {
+        this._sendWebSocketControlMessage('stop');
+    }
+
+    _disconnectWebSocket() {
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+        this.sessionStarted = false;
+    }
+
+    // ========== Common Methods ==========
+
+    async start() {
+        if (this._isRecording) {
+            console.warn('Already recording');
+            return;
+        }
+
+        try {
+            if (this.transport === 'signalr') {
+                // SignalR flow
+                if (!this.connection || this.connection.state === signalR.HubConnectionState.Disconnected) {
+                    await this._initializeSignalRConnection();
+                }
+                await this.connection.invoke('StartSession', this.model, this.lang, this.sessionId);
+            } else {
+                // WebSocket flow
+                await this._initializeWebSocket();
+                this._sendWebSocketControlMessage('start', {
+                    modelName: this.model,
+                    language: this.lang
+                });
+                await this._waitForWebSocketSessionStart();
+            }
+
+            // Initialize audio capture (common)
+            await this._startAudioCapture();
+            this._isRecording = true;
+
+        } catch (err) {
+            console.error('Failed to start:', err);
+            if (this.onerror) {
+                this.onerror({ error: 'audio-capture', message: err.message });
+            }
+        }
+    }
+
+    async _startAudioCapture() {
+        this.stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: 1,
+                sampleRate: 16000,
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            }
+        });
+
+        this.audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = this.audioContext.createMediaStreamSource(this.stream);
+
+        await this.audioContext.audioWorklet.addModule('/js/audio-processor.js');
+        this.audioWorklet = new AudioWorkletNode(this.audioContext, 'audio-processor', {
+            processorOptions: { chunkDuration: this.chunkDuration }
+        });
+
+        this.audioWorklet.port.onmessage = async (event) => {
+            const { audioData } = event.data;
+            await this._sendAudioChunk(audioData);
+        };
+
+        source.connect(this.audioWorklet);
+        this.audioWorklet.connect(this.audioContext.destination);
+    }
+
+    async _sendAudioChunk(float32Samples) {
+        if (this.transport === 'signalr') {
+            await this._sendAudioChunkSignalR(float32Samples);
+        } else {
+            await this._sendAudioChunkWebSocket(float32Samples);
+        }
+    }
+
+    _createWavBuffer(float32Samples) {
+        const sampleRate = 16000;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+
+        const int16Samples = new Int16Array(float32Samples.length);
+        for (let i = 0; i < float32Samples.length; i++) {
+            const sample = Math.max(-1, Math.min(1, float32Samples[i]));
+            int16Samples[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        }
+
+        const dataSize = int16Samples.length * 2;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+
+        this._writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        this._writeString(view, 8, 'WAVE');
+        this._writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numChannels * bitsPerSample / 8, true);
+        view.setUint16(32, numChannels * bitsPerSample / 8, true);
+        view.setUint16(34, bitsPerSample, true);
+        this._writeString(view, 36, 'data');
+        view.setUint32(40, dataSize, true);
+
+        const samples = new Int16Array(buffer, 44);
+        samples.set(int16Samples);
+
+        return buffer;
+    }
+
+    _writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+        }
+    }
+
+    _arrayBufferToBase64(uint8Array) {
+        let binary = '';
+        const len = uint8Array.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+        }
+        return btoa(binary);
+    }
+
+    async stop() {
+        if (!this._isRecording) return;
+
+        this._isRecording = false;
+
+        // Stop audio capture
+        if (this.audioWorklet) {
+            this.audioWorklet.disconnect();
+            this.audioWorklet = null;
+        }
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => track.stop());
+            this.stream = null;
+        }
         if (this.audioContext) {
-            this.audioContext.close();
+            await this.audioContext.close();
             this.audioContext = null;
         }
 
-        if (this.mediaStream) {
-            this.mediaStream.getTracks().forEach(track => track.stop());
-            this.mediaStream = null;
-        }
-
-        if (this.onaudioend) {
-            this.onaudioend();
+        // Stop session (transport-specific)
+        if (this.transport === 'signalr') {
+            await this._stopSignalR();
+        } else {
+            this._stopWebSocket();
         }
     }
 
-    _emitError(error, message) {
-        if (this.onerror) {
-            this.onerror({
-                error: error,
-                message: message
-            });
+    async disconnect() {
+        await this.stop();
+
+        if (this.transport === 'signalr') {
+            await this._disconnectSignalR();
+        } else {
+            this._disconnectWebSocket();
         }
     }
-}
 
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = WhisperRecognition;
+    // Alias for compatibility
+    abort() {
+        this.disconnect();
+    }
 }
