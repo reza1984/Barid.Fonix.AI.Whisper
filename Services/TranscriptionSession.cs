@@ -12,11 +12,11 @@ public class TranscriptionSession : IDisposable
     private readonly SemaphoreSlim _processingLock = new(1, 1);
     private bool _disposed;
     private int _totalSamplesProcessed;
-    private const int MinSamplesForTranscription = 16000; // 1 second at 16kHz
-    private const int MaxBufferSamples = 16000 * 3; // 3 seconds max buffer (reduced for less overlap)
-    private const int OverlapSamples = 16000 / 8; // 0.125 second overlap (minimal)
+    private const int MinSamplesForTranscription = 12000; // 0.75 second at 16kHz (balance speed vs context)
+    private const int MaxBufferSamples = 16000 * 3; // 3 seconds max buffer (allow complete sentences)
+    private const int OverlapSamples = 16000 / 8; // 0.125 second overlap (better continuity)
     private const float VadThreshold = 0.02f; // Voice activity detection threshold
-    private const int SilenceThreshold = 16000; // 1 second of silence
+    private const int SilenceThreshold = 16000 * 2; // 2 seconds of silence (avoid breaking mid-sentence)
     private string _cumulativeTranscript = ""; // Full transcript so far
     private string _lastProcessedText = ""; // Last text we got from Whisper
     private int _silenceSamples = 0;

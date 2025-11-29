@@ -43,7 +43,7 @@ class WhisperRecognition {
         this.interimResults = options.interimResults !== undefined ? options.interimResults : true;
         this.lang = options.lang || 'auto';
         this.model = options.model || 'ggml-small.bin';
-        this.chunkDuration = options.chunkDuration || 300;
+        this.chunkDuration = options.chunkDuration || 200;
         this.sessionId = options.sessionId || null; // For multi-user collaboration
 
         // Events
@@ -81,6 +81,7 @@ class WhisperRecognition {
     async _initializeSignalRConnection() {
         this.connection = new signalR.HubConnectionBuilder()
             .withUrl(this.hubUrl)
+            .withHubProtocol(new signalR.protocols.msgpack.MessagePackHubProtocol())
             .withAutomaticReconnect({
                 nextRetryDelayInMilliseconds: (retryContext) => {
                     if (retryContext.elapsedMilliseconds < 60000) {
@@ -181,9 +182,8 @@ class WhisperRecognition {
             const wavBuffer = this._createWavBuffer(float32Samples);
             const uint8Array = new Uint8Array(wavBuffer);
 
-            // Convert to base64 string for SignalR JSON protocol
-            const base64 = this._arrayBufferToBase64(uint8Array);
-            await this.connection.invoke('SendAudioChunk', base64);
+            // Send binary data directly via MessagePack protocol (no base64 needed)
+            await this.connection.invoke('SendAudioChunk', uint8Array);
         } catch (err) {
             console.error('SignalR: Failed to send audio chunk:', err);
         }
@@ -431,15 +431,6 @@ class WhisperRecognition {
         for (let i = 0; i < string.length; i++) {
             view.setUint8(offset + i, string.charCodeAt(i));
         }
-    }
-
-    _arrayBufferToBase64(uint8Array) {
-        let binary = '';
-        const len = uint8Array.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(uint8Array[i]);
-        }
-        return btoa(binary);
     }
 
     async stop() {

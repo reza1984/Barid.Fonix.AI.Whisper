@@ -61,7 +61,7 @@ public class TranscriptionHub : Hub
         }
     }
 
-    public async Task SendAudioChunk(string audioDataBase64)
+    public async Task SendAudioChunk(byte[] audioData)
     {
         if (!_sessions.TryGetValue(Context.ConnectionId, out var session))
         {
@@ -71,8 +71,6 @@ public class TranscriptionHub : Hub
 
         try
         {
-            // Decode base64 to byte array
-            var audioData = Convert.FromBase64String(audioDataBase64);
 
             // Validate WAV header
             if (!AudioUtils.ValidateWavHeader(audioData))
